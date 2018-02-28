@@ -1,0 +1,203 @@
+---
+title: "What is R/Shiny?"
+author: "Kamil Foltyński"
+date: "2/28/2018"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Język programowania R
+
+Jest to `open-source`owy język progrmowania, który początkowo był używany głównie w statystyce, 
+ale dzięki ogromnej społeczności z roku na rok staje się bardziej popularny i znajduje szerokie zastosowanie w deep-learningu, data science, genetyce, data miningu, wizualizacji danych i tworzeniu aplikacji webowych (`shiny`).
+
+W rankingach najpopularniejszych języków jest również dość wysoko:
+
+- [TIOBE Index for February 2018](https://www.tiobe.com/tiobe-index/): miejsce 13
+- [hackernoon.com]: miejsce 6
+- [Stackoverflow Most Popular Programming Languages](https://insights.stackoverflow.com/survey/2017#most-popular-technologies): miejsce 15
+
+Co ciekawe `R` w [rankingu stackoverflow](https://insights.stackoverflow.com/survey/2017#top-paying-technologies) w kategorii *Top Paying Technologies by Region: Worldwide* jest na **10 miejscu (!)**
+
+# Aplikacja Shiny
+
+Składa się z 2 części:
+- front-end (`UI`/`ui.R`)
+- back-end (czyli część serwera zawyczaj w pliku `server.R`)
+
+# Reaktywność/Reactivity
+
+Cała filozofia aplikacji `Shiny` opiera się na tzw. `reaktywności`.
+
+`Reaktywność` jest to w uproszczeniu responsywaność aplikacji. Pozwala aplikacji automatycznie reagować na akcje użytkownika i aktualizować swój stan.
+
+Po stronie usera (UI) mamy tzw. `input`, czyli elementy, które user widzi np. w swojej przeglądarce. Można o nich myśleć jak o odpowiednikach w HTML, np:
+
+```html
+<form>
+  User name:<br>
+  <input type="text" name="username"><br>
+  User password:<br>
+  <input type="password" name="psw">
+</form>
+```
+
+w `r` będzie to wyglądać tak:
+
+```r
+fluidRow(
+  selectInput(inputId = "username", label = "User name:"),
+  selectInput(inputId = "password", label = "User password:")
+)
+```
+
+![](https://shiny.rstudio.com/images/reactivity_diagrams/01_hello.png)
+
+Na każdą akcję na takim `input` część serwerowa jest responsywna i w zaprogramowany przez nas sposób
+aplikacja może zareagować np.
+
+```r
+observeEvent(input$username, {
+  # ...jakis kod tworzacy obiekt "con"
+  usersDB <- dbSendQuery(con, "SELECT User FROM mysql.user;") %>%
+    as.data.frame()
+  
+  if (!input$username %in% usersDB$User) {
+    shiny::showModal(modalDialog(
+      h4("Warning", style = "text-align:center; color: orange;"),
+      tags$br(),
+      span("User does not exist. You have to register account first.", style = "color: orange;")
+    ))
+    req(FALSE)
+  }
+})
+```
+
+Oczywiścię zazwyczaj nie są to relacje jeden do jeden, tylko jeden do wielu:
+
+![](https://shiny.rstudio.com/images/reactivity_diagrams/faithful.png)
+
+lub wiele do wielu:
+
+![](https://images-gmi-pmc.edge-generalmills.com/59d9b710-99b6-41d9-ada8-7d8807da9fca.jpg)
+
+# Example app #1
+
+Aplikacja shiny to często nie tylko czysty kod w `R` - bywa, że dodajemy własne obiekty `html`, customizujemy `css`'y, tworzymy własne klasy `html` lub posiłkujemy się `JavaScript`/`jQuery`, np:
+
+```{r app_no1, echo = TRUE}
+library(shiny)
+library(shinyjs)
+
+jsCode <- "shinyjs.pageCol = function(params){$('body').css('background', params);}"
+
+shinyApp(
+  ui = fluidPage(
+    useShinyjs(),
+    extendShinyjs(text = jsCode),
+    
+    column(3,
+           selectInput("region", "Region:", 
+                       choices = colnames(WorldPhones)), # WorldPhones is default "built-in" dataset
+           br(),
+           selectInput("col", "Colour:",
+                       c("white", "green", "grey", "yellow", "red", "blue", "purple"))),
+    
+    column(9,
+           plotOutput("phonePlot"))
+  ),
+  
+  server = function(input, output) {
+    output$phonePlot <- renderPlot({
+      barplot(WorldPhones[,input$region]*1000, 
+              ylab = "Number of Telephones", xlab = "Year")
+    })
+    
+    observeEvent(input$col, {
+      js$pageCol(input$col)
+    })
+  },
+  options = list(height = 500)
+)
+```
+
+
+# Sztuka programowania reaktywnego
+
+Sama idea reaktywnoci nie jest skomplikowana - z jednej strony mamy akcje usera (UI), a z drugiej reakcje serwera. 
+Natomiast najtrudniejszym jest:
+- Przy dużych aplikacjach uchronienie się przez tzw. *reactive-spaghetti* (obrazek wyżej), czyli niepotrzebnym, nieefektywnym i niewydajnym plątaniem reaktynych wyrażeń
+- Efektywne programowanie, czyli wykorzystanie właściwości reaktywnych elementów, bo niektóre są `lazy`, a inne `eager`
+
+Przykład:
+
+```r
+# ui.R
+textInput(inputId = "n", label = "Wylicz n-tą liczbę Fibonacciego:")
+
+# server.R
+server <- function(input, output) {
+  fib <- function(n) ifelse(n<3, 1, fib(n-1)+fib(n-2))
+  
+  output$nthValue    <- renderText({ fib(as.numeric(input$n)) })
+  output$nthValueInv <- renderText({ 1 / fib(as.numeric(input$n)) })
+}
+```
+
+co wygląda na grafie tak:
+
+![](https://shiny.rstudio.com/images/reactivity_diagrams/fib_no_conductor.png)
+
+Algorytm Fibonacciego nie należy do najefektywniejszych, a w tym przypadku jest po stronie serwera 
+przeliczany **dwukrotnie**.
+
+Jednak gdybyśmy napisali kod z użyciem leniwego (`lazy`) wyrażenia `reactive`:
+
+```r
+# ui.R
+textInput(inputId = "n", label = "Wylicz n-tą liczbę Fibonacciego:")
+
+# server.R
+server <- function(input, output) {
+  fib <- function(n) ifelse(n<3, 1, fib(n-1)+fib(n-2))
+  
+  # leniwe wyrazenie reaktywne, przelicza sie tylko, kiedy zmieni sie wartosc input$n
+  currentFib <- reactive({ fib(as.numeric(input$n)) })
+
+  output$nthValue    <- renderText({ currentFib() })
+  output$nthValueInv <- renderText({ 1 / currentFib() })
+}
+```
+
+to funkcja `fib()` zostanie uruchomiona tylko raz (środkowy klocek to nasz `reactive`):
+
+![](https://shiny.rstudio.com/images/reactivity_diagrams/conductor.png)
+
+
+# Example app #2
+```{r app_no2, echo=FALSE}
+shinyAppDir(
+  system.file("examples/06_tabsets", package = "shiny"),
+  options = list(
+    width = "100%", height = 550
+  )
+)
+```
+
+
+# Developer R/Shiny w paru słowach
+
+Developer R/Shiny w dzisiejszych czasach to taki full-stack dev, tester, a czasami devOps.
+
+Musi ogarniać back-end kodząc w R, od strony front-endu niezbędna jest mu znajomość css, html, często JavaScript, bootstrap - musi mieć też czasem wwejść w buty UX designera, żeby projektowana aplikacja nie tylko ładnie wyglądała, ale też była praktyczna/ dla usera. Dodatkowo aplikacje pisane są wraz z `unit-testami` i `front-end` testami (z użyciem `Selenium` `phantomJS`/`casperJS`).
+
+W naszym przypadku taki dev zna dobrze `basha` i `unixa` przede wszystkim po to, żeby skonfigurować sobie stabilne środowisko pracy z użyciem `Dockera`. Dodatkowo musi też zadbać o jego tzw. `reproducibility`. Poza tym aplikacje shiny piszemy pod kątem działania w `Continous Integration (CI)`
+
+
+### Źródła:
+- https://shiny.rstudio.com/articles/reactivity-overview.html
+- internet
